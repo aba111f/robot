@@ -7,6 +7,7 @@
 #include "autopilot.h"
 #include "web.h"
 #include "sensors.h"
+#include "mapping.h"
 
 static WebServer server(80);
 
@@ -32,6 +33,7 @@ static void handleRoot() {
     "  <p>\n"
     "    <a href=\"/auto\"><button>Auto</button></a>\n"
     "    <a href=\"/manual\"><button>Manual</button></a>\n"
+    "    <a href=\"/mapping\"><button>Mapping</button></a>\n"
     "  </p>\n"
     "  <p>\n"
     "    <a href=\"/forward\"><button>Forward</button></a><br>\n"
@@ -207,6 +209,7 @@ static void redirectHome() {
 // Ручная команда: выключает автопилот и выполняет движение
 static void manual(Move m, const char* name) {
   Serial.printf(">>> %s\n", name);
+  mappingStop();
   autoStop();
   motorsMove(m, true);
   redirectHome();
@@ -244,9 +247,10 @@ void webInit() {
   server.on("/backward", []() { manual(M_BACKWARD, "НАЗАД");  });
   server.on("/left",     []() { manual(M_LEFT,     "ЛЕВО");   });
   server.on("/right",    []() { manual(M_RIGHT,    "ПРАВО");  });
-  server.on("/stop",     []() { Serial.println(">>> СТОП");   autoStop(); redirectHome(); });
-  server.on("/manual",   []() { Serial.println(">>> MANUAL"); autoStop(); redirectHome(); });
-  server.on("/auto",     []() { Serial.println(">>> AUTO");   autoStart(); redirectHome(); });
+  server.on("/stop",     []() { Serial.println(">>> СТОП");   mappingStop(); autoStop(); redirectHome(); });
+  server.on("/manual",   []() { Serial.println(">>> MANUAL"); mappingStop(); autoStop(); redirectHome(); });
+  server.on("/auto",     []() { Serial.println(">>> AUTO");   mappingStop(); autoStart(); redirectHome(); });
+  server.on("/mapping",  []() { Serial.println(">>> MAPPING"); autoStop(); mappingStart(); redirectHome(); });
   server.on("/status", handleStatusPage);
   server.on("/api/status", handleApiStatus);
   server.on("/speed", []() {

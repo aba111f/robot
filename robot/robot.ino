@@ -7,6 +7,7 @@
 #include "autopilot.h"
 #include "web.h"
 #include "sensors.h"
+#include "mapping.h"
 
 void setup() {
   Serial.begin(115200);
@@ -24,7 +25,8 @@ void setup() {
 
 void loop() {
   webUpdate();
-  autoUpdate();
+  if (mappingIsActive()) mappingUpdate();
+  else                   autoUpdate();
   sensorsUpdate();
   yield();
 }
