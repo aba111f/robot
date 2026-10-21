@@ -62,6 +62,7 @@ int autoChooseDirection(const float distances[], int count, int* farthestIndex) 
   if (!distances || count < NUM_ANGLES) return -1;
 
   int bestIdx = -1;
+  const int straightIndex = NUM_ANGLES / 2;
   int farIdx = 0;
   float bestScore = -1000;
   for (int i = 0; i < NUM_ANGLES; i++) {
@@ -75,6 +76,10 @@ int autoChooseDirection(const float distances[], int count, int* farthestIndex) 
     if (distances[i] > distances[farIdx]) farIdx = i;
   }
   if (farthestIndex) *farthestIndex = farIdx;
+  if (distances[straightIndex] > STOP_DIST_CM + 10 &&
+      corridorWidthCm(straightIndex, distances) >= NEED_WIDTH_CM) {
+    return straightIndex;
+  }
   return bestIdx;
 }
 

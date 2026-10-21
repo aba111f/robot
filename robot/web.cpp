@@ -14,7 +14,7 @@ static WebServer server(80);
 static void handleRoot() {
   static char page[6144];
   int speed = motorsSpeedPercent();
-  const char* mode = autoIsEnabled() ? "Auto" : "Manual";
+  const char* mode = autoIsEnabled() ? "Auto" : mappingIsActive() ? "Mapping" : "Manual";
   
   snprintf(page, sizeof(page),
     "<html>\n"
@@ -94,13 +94,14 @@ static void handleApiStatus() {
   static char json[1024];
   snprintf(json, sizeof(json),
     "{\"state\":\"%s\",\"distance\":%.1f,\"servoAngle\":%d,\"servoReady\":%s,"
-    "\"hits\":%d,\"stateTimeMs\":%lu,\"lastDecision\":\"%s\",\"autoEnabled\":%s,"
+    "\"hits\":%d,\"stateTimeMs\":%lu,\"lastDecision\":\"%s\",\"autoEnabled\":%s,\"mappingActive\":%s,"
     "\"temp\":%s,\"hum\":%s,\"gasMv\":%d,\"gasPct\":%d,\"gasWarm\":%s,"
     "\"soundMv\":%d,\"soundPct\":%d}",
     st.stateName, st.distanceCm, st.servoAngle,
     st.servoReady ? "true" : "false",
     st.hits, st.stateTimeMs, st.lastDecision,
     st.autoEnabled ? "true" : "false",
+    mappingIsActive() ? "true" : "false",
     t, h, s.gasMv, s.gasPercent, s.gasWarm ? "true" : "false",
     s.soundMv, s.soundPercent);
 
@@ -216,9 +217,11 @@ function updateStatus() {
     .then(r => r.json())
     .then(d => {
       $('state').textContent = d.state;
-      $('autoStatus').innerHTML = d.autoEnabled
-        ? '<span style="color:#4CAF50;font-size:18px;">● АВТОПИЛОТ ВКЛЮЧЕН</span>'
-        : '<span style="color:#888;font-size:18px;">● РУЧНОЙ РЕЖИМ</span>';
+      $('autoStatus').innerHTML = d.mappingActive
+        ? '<span style="color:#ffd166;font-size:18px;">● MAPPING ВКЛЮЧЁН</span>'
+        : d.autoEnabled
+          ? '<span style="color:#4CAF50;font-size:18px;">● АВТОПИЛОТ ВКЛЮЧЕН</span>'
+          : '<span style="color:#888;font-size:18px;">● РУЧНОЙ РЕЖИМ</span>';
       $('distance').textContent = d.distance.toFixed(1);
       $('servoAngle').textContent = d.servoAngle;
       const re = $('servoReady');
@@ -302,6 +305,7 @@ static void manual(Move m, const char* name) {
 
 static void connectWifi() {
   WiFi.mode(WIFI_STA);
+  WiFi.setAutoReconnect(true);
   WiFi.begin(WIFI_SSID, WIFI_PASS);
   Serial.print("Подключение к WiFi");
   unsigned long t0 = millis();

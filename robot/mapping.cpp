@@ -7,12 +7,12 @@
 #include "scanner.h"
 #include "autopilot.h"
 #include "ultrasonic.h"
+#include "web.h"
 // ---------- Пины ----------
 
 // ---------- Параметры скана ----------
 const int   ANGLE_STEP = 5;
-const int   N_ANGLES   = (SERVO_SPAN * 2) / ANGLE_STEP + 1;
-const int   N_SAMPLES  = 3;
+const int   N_ANGLES   = ((SERVO_LEFT - SERVO_RIGHT + ANGLE_STEP - 1) / ANGLE_STEP) + 1;
 const float MIN_CM = 3.0f, MAX_CM = 200.0f;
 
 // ---------- Параметры ICP ----------
@@ -37,32 +37,19 @@ Pose pose = {0, 0, 0};
 static bool active = false;
 static bool initialized = false;
 
-// ================= Сенсор =================
-float readCm() {
-  digitalWrite(TRIG_PIN, LOW);  delayMicroseconds(2);
-  digitalWrite(TRIG_PIN, HIGH); delayMicroseconds(10);
-  digitalWrite(TRIG_PIN, LOW);
-  long us = pulseIn(ECHO_PIN, HIGH, 25000);
-  if (us == 0) return -1;
-  return us * 0.0343f / 2.0f;
-}
-
-float medianRead() {
-  float v[N_SAMPLES];
-  for (int i = 0; i < N_SAMPLES; i++) { v[i] = readCm(); delay(10); }
-  for (int i = 0; i < N_SAMPLES - 1; i++)
-    for (int j = i + 1; j < N_SAMPLES; j++)
-      if (v[j] < v[i]) { float t = v[i]; v[i] = v[j]; v[j] = t; }
-  return v[N_SAMPLES / 2];
-}
-
 // Делает sweep, пишет валидные точки в out (кадр робота: x вперёд, серво 90° = прямо)
 int doScan(Pt* out) {
   int n = 0;
-  for (int a = SERVO_RIGHT; a <= SERVO_LEFT; a += ANGLE_STEP) {
+  for (int i = 0; i < N_ANGLES; i++) {
+    int a = SERVO_RIGHT + (SERVO_LEFT - SERVO_RIGHT) * i / (N_ANGLES - 1);
     scannerMove(a);
-    while (!scannerReady()) { delay(5); yield(); }
-    float r = medianRead();
+    while (!scannerReady()) {
+      webUpdate();
+      if (!active) return 0;
+      delay(5);
+      yield();
+    }
+    float r = ultrasonicScanRead();
     if (r > MIN_CM && r < MAX_CM) {
       float phi = (a - SERVO_CENTER) * DEG_TO_RAD;
       out[n].x = r * cosf(phi);
@@ -209,7 +196,7 @@ size_t mappingCopyDisplay(char* out, size_t capacity) {
   return offset;
 }
 
-// ================= Движение (заглушки) =================
+// ================= Движение =================
 const float MAPPING_FORWARD_MS_PER_CM = 50.0f;
 
 float driveForward(float cm) {
@@ -221,6 +208,8 @@ float driveForward(float cm) {
 
   motorsForward();
   while (millis() - startedAt < targetMs) {
+    webUpdate();
+    if (!active) break;
     unsigned long now = millis();
     if (now - lastMeasure >= 60) {
       lastMeasure = now;
@@ -241,9 +230,15 @@ float driveForward(float cm) {
 
 void turnInPlace(float deg) {
   if (deg == 0) return;
+  unsigned long turnMs = (unsigned long)(fabsf(deg) * TURN_90_MS / 90.0f);
+  unsigned long startedAt = millis();
   if (deg > 0) motorsLeft();
   else         motorsRight();
-  delay((unsigned long)(fabsf(deg) * TURN_90_MS / 90.0f));
+  while (millis() - startedAt < turnMs && active) {
+    webUpdate();
+    delay(5);
+    yield();
+  }
   motorsStop();
 }
 
@@ -254,7 +249,13 @@ static bool chooseSafeMotion(float& turnDeg, float& distanceCm) {
 
   for (int i = 0; i < angleCount; i++) {
     scannerMove(autoScanAngle(i));
-    while (!scannerReady()) { delay(5); yield(); }
+    while (!scannerReady()) {
+      webUpdate();
+      if (!active) return false;
+      delay(5);
+      yield();
+    }
+    if (!active) return false;
     distances[i] = ultrasonicScanRead();
   }
   scannerCenterNow();
@@ -262,7 +263,8 @@ static bool chooseSafeMotion(float& turnDeg, float& distanceCm) {
   int farthestIndex = 0;
   int bestIndex = autoChooseDirection(distances, angleCount, &farthestIndex);
   if (bestIndex < 0) {
-    Serial.println("Mapping: безопасного прохода нет, робот остановлен");
+    Serial.println("Mapping: тупик, сдаю назад и разворачиваюсь");
+    turnDeg = autoScanAngle(farthestIndex) >= SERVO_CENTER ? 180.0f : -180.0f;
     return false;
   }
 
@@ -273,16 +275,12 @@ static bool chooseSafeMotion(float& turnDeg, float& distanceCm) {
 }
 
 // ================= Основной код =================
-struct Cmd { float turnDeg; float fwdCm; };
-Cmd route[] = { {0, 30}, {0, 30}, {20, 25}, {0, 30}, {-20, 25} };
-const int N_CMDS = sizeof(route) / sizeof(route[0]);
-int cmdIdx = 0;
+const float MAPPING_STEP_CM = 30.0f;
 
 void mappingStart() {
   if (active) return;
   memset(grid, 0, sizeof(grid));
   pose = {0, 0, 0};
-  cmdIdx = 0;
   initialized = false;
   active = true;
   motorsStop();
@@ -306,32 +304,48 @@ void mappingUpdate() {
   if (!active) return;
   if (!initialized) {
     nPrev = doScan(prevPts);
+    if (!active) return;
     updateGrid(prevPts, nPrev, pose);
-    printMap();
     initialized = true;
     return;
   }
-  if (cmdIdx >= N_CMDS) {
-    motorsStop();
-    scannerCenterNow();
-    active = false;
-    Serial.println("Mapping complete");
-    return;
-  }
-
-  Cmd cmd = route[cmdIdx];
   float turnDeg = 0;
-  float distanceCm = cmd.fwdCm;
+  float distanceCm = MAPPING_STEP_CM;
   if (!chooseSafeMotion(turnDeg, distanceCm)) {
+    if (!active) {
+      motorsStop();
+      return;
+    }
+    motorsBackward();
+    unsigned long startedAt = millis();
+    while (millis() - startedAt < BACK_TIME_MS && active) {
+      webUpdate();
+      delay(5);
+      yield();
+    }
     motorsStop();
-    active = false;
+    if (!active) return;
+    turnInPlace(turnDeg);
+    Pose recovery = {
+      -(float)BACK_TIME_MS / MAPPING_FORWARD_MS_PER_CM,
+      0,
+      turnDeg * DEG_TO_RAD
+    };
+    pose = compose(pose, recovery);
+    nCur = doScan(curPts);
+    if (!active) return;
+    updateGrid(curPts, nCur, pose);
+    memcpy(prevPts, curPts, sizeof(Pt) * nCur);
+    nPrev = nCur;
     return;
   }
-  cmdIdx++;
+  if (!active) return;
 
   // 1. Следуем по самому свободному проходу, выбранному алгоритмом автопилота.
   if (turnDeg != 0) turnInPlace(turnDeg);
+  if (!active) return;
   distanceCm = driveForward(distanceCm);
+  if (!active) return;
   delay(300);                                   // дать корпусу успокоиться
 
   // 2. Начальное приближение из команды
@@ -340,6 +354,7 @@ void mappingUpdate() {
 
   // 3. Новый скан и ICP
   nCur = doScan(curPts);
+  if (!active) return;
   Pose icpRes; float err = 0;
   Pose delta = guess;
   if (icp(curPts, nCur, prevPts, nPrev, guess, icpRes, err) && err < ICP_MAX_ERR) {
@@ -356,5 +371,4 @@ void mappingUpdate() {
   memcpy(prevPts, curPts, sizeof(Pt) * nCur);
   nPrev = nCur;
 
-  printMap();
 }

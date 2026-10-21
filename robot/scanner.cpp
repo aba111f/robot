@@ -17,7 +17,7 @@ void scannerInit() {
 }
 
 void scannerMove(int angle) {
-  angle = constrain(angle, 5, 175);
+  angle = constrain(angle, SERVO_RIGHT, SERVO_LEFT);
   int delta = abs(angle - servoAngle);
   settleMs = 120 + delta * 6;
   servoAngle = angle;

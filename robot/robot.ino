@@ -8,9 +8,28 @@
 #include "web.h"
 #include "sensors.h"
 #include "mapping.h"
+#include <esp_system.h>
+
+static const char* resetReasonName(esp_reset_reason_t reason) {
+  switch (reason) {
+    case ESP_RST_POWERON: return "power-on";
+    case ESP_RST_EXT: return "external reset";
+    case ESP_RST_SW: return "software reset";
+    case ESP_RST_PANIC: return "panic";
+    case ESP_RST_INT_WDT: return "interrupt watchdog";
+    case ESP_RST_TASK_WDT: return "task watchdog";
+    case ESP_RST_WDT: return "watchdog";
+    case ESP_RST_DEEPSLEEP: return "deep sleep";
+    case ESP_RST_BROWNOUT: return "brownout";
+    case ESP_RST_SDIO: return "SDIO reset";
+    default: return "unknown";
+  }
+}
 
 void setup() {
   Serial.begin(115200);
+  esp_reset_reason_t reason = esp_reset_reason();
+  Serial.printf("ESP reset reason: %s (%d)\n", resetReasonName(reason), (int)reason);
 
   scannerInit();      // 1. серво первым (занимает свой таймер ШИМ)
   motorsInit();       // 2. потом ШИМ моторов
