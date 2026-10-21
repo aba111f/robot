@@ -39,14 +39,43 @@ static bool angleIsLeft(int angle) {
   return (angle - SERVO_CENTER) * (SERVO_LEFT - SERVO_CENTER) > 0;
 }
 
-static float corridorWidthCm(int i) {
+static float corridorWidthCm(int i, const float distances[]) {
   int a = max(0, i - 1);
   int b = min(NUM_ANGLES - 1, i + 1);
-  float d = scanDist[a];
-  for (int k = a; k <= b; k++) d = min(d, scanDist[k]);
+  float d = distances[a];
+  for (int k = a; k <= b; k++) d = min(d, distances[k]);
   float spanDeg = abs(scanAngles[b] - scanAngles[a]);
   float spanRad = radians(spanDeg);
   return 2.0f * d * tanf(spanRad / 2.0f);
+}
+
+int autoScanAngle(int index) {
+  if (index < 0 || index >= NUM_ANGLES) return SERVO_CENTER;
+  return scanAngles[index];
+}
+
+int autoScanAngleCount() {
+  return NUM_ANGLES;
+}
+
+int autoChooseDirection(const float distances[], int count, int* farthestIndex) {
+  if (!distances || count < NUM_ANGLES) return -1;
+
+  int bestIdx = -1;
+  int farIdx = 0;
+  float bestScore = -1000;
+  for (int i = 0; i < NUM_ANGLES; i++) {
+    float width = corridorWidthCm(i, distances);
+    bool fits = (width >= NEED_WIDTH_CM) && (distances[i] > STOP_DIST_CM + 10);
+    float score = distances[i] - 0.25f * abs(scanAngles[i] - SERVO_CENTER);
+    if (fits && score > bestScore) {
+      bestScore = score;
+      bestIdx = i;
+    }
+    if (distances[i] > distances[farIdx]) farIdx = i;
+  }
+  if (farthestIndex) *farthestIndex = farIdx;
+  return bestIdx;
 }
 
 static void setState(State s) {
@@ -76,22 +105,18 @@ static void setState(State s) {
 }
 
 static void decideDirection() {
-  int bestIdx = -1;        
-  float bestScore = -1000;
-  int farIdx = 0;          
+  int farIdx = 0;
+  int bestIdx = autoChooseDirection(scanDist, NUM_ANGLES, &farIdx);
 
   Serial.println("--- Результат сканирования ---");
   for (int i = 0; i < NUM_ANGLES; i++) {
-    float w = corridorWidthCm(i);
+    float w = corridorWidthCm(i, scanDist);
     bool fits = (w >= NEED_WIDTH_CM) && (scanDist[i] > STOP_DIST_CM + 10);
-    float score = scanDist[i] - 0.25f * abs(scanAngles[i] - SERVO_CENTER);
 
     Serial.printf("угол %3d (%s): %.1f см, ширина %.1f см  %s\n",
                   scanAngles[i], angleIsLeft(scanAngles[i]) ? "Л" : "П",
                   scanDist[i], w, fits ? "OK" : "узко");
 
-    if (fits && score > bestScore) { bestScore = score; bestIdx = i; }
-    if (scanDist[i] > scanDist[farIdx]) farIdx = i;
   }
 
   if (bestIdx < 0) {

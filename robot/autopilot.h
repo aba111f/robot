@@ -19,3 +19,8 @@ struct RobotStatus {
 };
 
 RobotStatus autoGetStatus();
+
+// Выбирает индекс лучшего проходимого направления; -1 означает тупик.
+int autoChooseDirection(const float distances[], int count, int* farthestIndex);
+int autoScanAngle(int index);
+int autoScanAngleCount();

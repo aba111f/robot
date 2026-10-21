@@ -5,14 +5,13 @@
 #include "mapping.h"
 #include "motors.h"
 #include "scanner.h"
+#include "autopilot.h"
+#include "ultrasonic.h"
 // ---------- Пины ----------
 
 // ---------- Параметры скана ----------
-const int   ANGLE_STEP = 3;
-const int   SCAN_MIN_ANGLE = 5;
-const int   SCAN_MAX_ANGLE = 175;
-const int   N_ANGLES   = (SCAN_MAX_ANGLE - SCAN_MIN_ANGLE) / ANGLE_STEP + 1;
-const int   SETTLE_MS  = 40;
+const int   ANGLE_STEP = 5;
+const int   N_ANGLES   = (SERVO_SPAN * 2) / ANGLE_STEP + 1;
 const int   N_SAMPLES  = 3;
 const float MIN_CM = 3.0f, MAX_CM = 200.0f;
 
@@ -60,11 +59,12 @@ float medianRead() {
 // Делает sweep, пишет валидные точки в out (кадр робота: x вперёд, серво 90° = прямо)
 int doScan(Pt* out) {
   int n = 0;
-  for (int a = SCAN_MIN_ANGLE; a <= SCAN_MAX_ANGLE; a += ANGLE_STEP) {
-    scannerMove(a); delay(SETTLE_MS);
+  for (int a = SERVO_RIGHT; a <= SERVO_LEFT; a += ANGLE_STEP) {
+    scannerMove(a);
+    while (!scannerReady()) { delay(5); yield(); }
     float r = medianRead();
     if (r > MIN_CM && r < MAX_CM) {
-      float phi = (a - 90) * DEG_TO_RAD;
+      float phi = (a - SERVO_CENTER) * DEG_TO_RAD;
       out[n].x = r * cosf(phi);
       out[n].y = r * sinf(phi);
       n++;
@@ -212,11 +212,31 @@ size_t mappingCopyDisplay(char* out, size_t capacity) {
 // ================= Движение (заглушки) =================
 const float MAPPING_FORWARD_MS_PER_CM = 50.0f;
 
-void driveForward(float cm) {
-  if (cm <= 0) return;
+float driveForward(float cm) {
+  if (cm <= 0) return 0;
+  const unsigned long targetMs = (unsigned long)(cm * MAPPING_FORWARD_MS_PER_CM);
+  const unsigned long startedAt = millis();
+  unsigned long lastMeasure = startedAt;
+  int obstacleHits = 0;
+
   motorsForward();
-  delay((unsigned long)(cm * MAPPING_FORWARD_MS_PER_CM));
+  while (millis() - startedAt < targetMs) {
+    unsigned long now = millis();
+    if (now - lastMeasure >= 60) {
+      lastMeasure = now;
+      float distance = ultrasonicRead();
+      if (distance > 0 && distance < STOP_DIST_CM) obstacleHits++;
+      else obstacleHits = 0;
+      if (obstacleHits >= 2) {
+        Serial.printf("Mapping: препятствие на %.1f см, останавливаюсь\n", distance);
+        break;
+      }
+    }
+    delay(5);
+    yield();
+  }
   motorsStop();
+  return min(cm, (millis() - startedAt) / MAPPING_FORWARD_MS_PER_CM);
 }
 
 void turnInPlace(float deg) {
@@ -225,6 +245,31 @@ void turnInPlace(float deg) {
   else         motorsRight();
   delay((unsigned long)(fabsf(deg) * TURN_90_MS / 90.0f));
   motorsStop();
+}
+
+static bool chooseSafeMotion(float& turnDeg, float& distanceCm) {
+  const int angleCount = autoScanAngleCount();
+  float distances[7];
+  if (angleCount > (int)(sizeof(distances) / sizeof(distances[0]))) return false;
+
+  for (int i = 0; i < angleCount; i++) {
+    scannerMove(autoScanAngle(i));
+    while (!scannerReady()) { delay(5); yield(); }
+    distances[i] = ultrasonicScanRead();
+  }
+  scannerCenterNow();
+
+  int farthestIndex = 0;
+  int bestIndex = autoChooseDirection(distances, angleCount, &farthestIndex);
+  if (bestIndex < 0) {
+    Serial.println("Mapping: безопасного прохода нет, робот остановлен");
+    return false;
+  }
+
+  turnDeg = autoScanAngle(bestIndex) - SERVO_CENTER;
+  float clearance = distances[bestIndex] - STOP_DIST_CM;
+  distanceCm = min(distanceCm, clearance);
+  return distanceCm > 0;
 }
 
 // ================= Основной код =================
@@ -274,16 +319,24 @@ void mappingUpdate() {
     return;
   }
 
-  Cmd cmd = route[cmdIdx++];
+  Cmd cmd = route[cmdIdx];
+  float turnDeg = 0;
+  float distanceCm = cmd.fwdCm;
+  if (!chooseSafeMotion(turnDeg, distanceCm)) {
+    motorsStop();
+    active = false;
+    return;
+  }
+  cmdIdx++;
 
-  // 1. Едем (сначала поворот, потом прямо)
-  if (cmd.turnDeg != 0) turnInPlace(cmd.turnDeg);
-  driveForward(cmd.fwdCm);
+  // 1. Следуем по самому свободному проходу, выбранному алгоритмом автопилота.
+  if (turnDeg != 0) turnInPlace(turnDeg);
+  distanceCm = driveForward(distanceCm);
   delay(300);                                   // дать корпусу успокоиться
 
   // 2. Начальное приближение из команды
-  float dth = cmd.turnDeg * DEG_TO_RAD;
-  Pose guess = { cmd.fwdCm * cosf(dth), cmd.fwdCm * sinf(dth), dth };
+  float dth = turnDeg * DEG_TO_RAD;
+  Pose guess = { distanceCm * cosf(dth), distanceCm * sinf(dth), dth };
 
   // 3. Новый скан и ICP
   nCur = doScan(curPts);

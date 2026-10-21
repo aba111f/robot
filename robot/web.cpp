@@ -12,7 +12,7 @@
 static WebServer server(80);
 
 static void handleRoot() {
-  static char page[2048];
+  static char page[6144];
   int speed = motorsSpeedPercent();
   const char* mode = autoIsEnabled() ? "Auto" : "Manual";
   
@@ -25,6 +25,7 @@ static void handleRoot() {
     "    body { background-color: blue; color: white; text-align: center; font-family: sans-serif; }\n"
     "    button { font-size: 22px; padding: 14px 22px; margin: 6px; }\n"
     "    input[type=range] { width: 70%%; height: 30px; }\n"
+    "    canvas { display: block; width: min(90%%, 520px); aspect-ratio: 1; height: auto; margin: 12px auto; background: #172126; border: 1px solid #888; image-rendering: pixelated; }\n"
     "  </style>\n"
     "</head>\n"
     "<body>\n"
@@ -34,7 +35,6 @@ static void handleRoot() {
     "    <a href=\"/auto\"><button>Auto</button></a>\n"
     "    <a href=\"/manual\"><button>Manual</button></a>\n"
     "    <a href=\"/mapping\"><button>Mapping</button></a>\n"
-    "    <a href=\"/status\"><button>Status / Map</button></a>\n"
     "  </p>\n"
     "  <p>\n"
     "    <a href=\"/forward\"><button>Forward</button></a><br>\n"
@@ -47,6 +47,32 @@ static void handleRoot() {
     "  <form action=\"/speed\" method=\"GET\">\n"
     "    <input type=\"range\" name=\"v\" min=\"0\" max=\"100\" step=\"5\" value=\"%d\" onchange=\"this.form.submit()\">\n"
     "  </form>\n"
+    "  <h2>Карта помещения</h2>\n"
+    "  <canvas id=\"mapCanvas\" width=\"400\" height=\"400\"></canvas>\n"
+    "  <p id=\"mapUpdated\">Ожидание карты...</p>\n"
+    "  <p>🟥 Препятствие &nbsp; 🟩 Свободно &nbsp; 🟨 Робот</p>\n"
+    "  <script>\n"
+    "    function updateMap() {\n"
+    "      fetch('/api/map').then(r => { if (!r.ok) throw new Error(r.status); return r.text(); })\n"
+    "        .then(text => {\n"
+    "          const canvas = document.getElementById('mapCanvas');\n"
+    "          const ctx = canvas.getContext('2d');\n"
+    "          const rows = text.trimEnd().split('\\n');\n"
+    "          const cell = canvas.width / rows[0].length;\n"
+    "          ctx.fillStyle = '#172126'; ctx.fillRect(0, 0, canvas.width, canvas.height);\n"
+    "          rows.forEach((row, y) => { for (let x = 0; x < row.length; x++) {\n"
+    "            const c = row[x];\n"
+    "            if (c === '#') ctx.fillStyle = '#e35b48';\n"
+    "            else if (c === '.') ctx.fillStyle = '#88c78a';\n"
+    "            else if (c === 'R') ctx.fillStyle = '#ffd166';\n"
+    "            else continue;\n"
+    "            ctx.fillRect(x * cell, y * cell, cell, cell);\n"
+    "          }});\n"
+    "          document.getElementById('mapUpdated').textContent = 'Карта обновлена: ' + new Date().toLocaleTimeString();\n"
+    "        }).catch(e => { document.getElementById('mapUpdated').textContent = 'Карта недоступна: ' + e; });\n"
+    "    }\n"
+    "    updateMap(); setInterval(updateMap, 1500);\n"
+    "  </script>\n"
     "</body>\n"
     "</html>\n", mode, speed, speed);
   server.send(200, "text/html", page);
