@@ -34,6 +34,7 @@ static void handleRoot() {
     "    <a href=\"/auto\"><button>Auto</button></a>\n"
     "    <a href=\"/manual\"><button>Manual</button></a>\n"
     "    <a href=\"/mapping\"><button>Mapping</button></a>\n"
+    "    <a href=\"/status\"><button>Status / Map</button></a>\n"
     "  </p>\n"
     "  <p>\n"
     "    <a href=\"/forward\"><button>Forward</button></a><br>\n"
@@ -80,6 +81,16 @@ static void handleApiStatus() {
   server.send(200, "application/json", json);
 }
 
+static void handleApiMap() {
+  static char mapText[10101];
+  size_t length = mappingCopyDisplay(mapText, sizeof(mapText));
+  if (length == 0) {
+    server.send(500, "text/plain", "Map buffer too small");
+    return;
+  }
+  server.send(200, "text/plain; charset=utf-8", mapText);
+}
+
 static const char STATUS_HTML[] PROGMEM = R"rawliteral(
 <!DOCTYPE html>
 <html>
@@ -97,6 +108,10 @@ static const char STATUS_HTML[] PROGMEM = R"rawliteral(
   .decision { background: #333; padding: 15px; border-radius: 5px; margin-top: 10px; font-size: 18px; color: #ffeb3b; }
   .bar { height: 10px; background: #444; border-radius: 5px; margin-top: 6px; overflow: hidden; }
   .fill { height: 100%; width: 0; background: #4CAF50; transition: width .3s; }
+  .map-canvas { display: block; width: min(100%, 520px); aspect-ratio: 1; height: auto; margin: 12px auto; background: #151a1d; image-rendering: pixelated; border: 1px solid #555; }
+  .map-legend { display: flex; justify-content: center; gap: 18px; flex-wrap: wrap; color: #bbb; font-size: 14px; }
+  .map-key { display: inline-flex; align-items: center; gap: 6px; }
+  .swatch { width: 12px; height: 12px; display: inline-block; }
   h3 { margin: 0 0 5px; color: #aaa; font-size: 16px; }
   a.btn { display: inline-block; margin-top: 20px; padding: 10px 20px; background: #4CAF50; color: white; text-decoration: none; border-radius: 5px; }
 </style>
@@ -154,6 +169,18 @@ static const char STATUS_HTML[] PROGMEM = R"rawliteral(
   <div class="decision" id="lastDecision">Загрузка...</div>
 </div>
 
+<div class="card">
+  <h3>Карта помещения</h3>
+  <canvas id="mapCanvas" class="map-canvas" width="400" height="400"></canvas>
+  <div class="map-legend">
+    <span class="map-key"><i class="swatch" style="background:#e35b48"></i>Препятствие</span>
+    <span class="map-key"><i class="swatch" style="background:#88c78a"></i>Свободно</span>
+    <span class="map-key"><i class="swatch" style="background:#202a31"></i>Неизвестно</span>
+    <span class="map-key"><i class="swatch" style="background:#ffd166"></i>Робот</span>
+  </div>
+  <div class="metric-label" id="mapUpdated">Ожидание карты...</div>
+</div>
+
 <a href="/" class="btn">← Вернуться к управлению</a>
 
 <script>
@@ -192,6 +219,38 @@ function updateStatus() {
 }
 setInterval(updateStatus, 700);
 updateStatus();
+
+function updateMap() {
+  fetch('/api/map')
+    .then(r => {
+      if (!r.ok) throw new Error('HTTP ' + r.status);
+      return r.text();
+    })
+    .then(text => {
+      const canvas = $('mapCanvas');
+      const context = canvas.getContext('2d');
+      const rows = text.trimEnd().split('\n');
+      const cellSize = canvas.width / rows[0].length;
+      context.fillStyle = '#202a31';
+      context.fillRect(0, 0, canvas.width, canvas.height);
+      rows.forEach((row, y) => {
+        for (let x = 0; x < row.length; x++) {
+          const cell = row[x];
+          if (cell === '#') context.fillStyle = '#e35b48';
+          else if (cell === '.') context.fillStyle = '#88c78a';
+          else if (cell === 'R') context.fillStyle = '#ffd166';
+          else continue;
+          context.fillRect(x * cellSize, y * cellSize, cellSize, cellSize);
+        }
+      });
+      $('mapUpdated').textContent = 'Обновлено: ' + new Date().toLocaleTimeString();
+    })
+    .catch(e => {
+      $('mapUpdated').textContent = 'Карта недоступна: ' + e.message;
+    });
+}
+setInterval(updateMap, 1500);
+updateMap();
 </script>
 </body>
 </html>
@@ -253,6 +312,7 @@ void webInit() {
   server.on("/mapping",  []() { Serial.println(">>> MAPPING"); autoStop(); mappingStart(); redirectHome(); });
   server.on("/status", handleStatusPage);
   server.on("/api/status", handleApiStatus);
+  server.on("/api/map", handleApiMap);
   server.on("/speed", []() {
     if (server.hasArg("v")) {
       motorsSetSpeedPercent(server.arg("v").toInt());

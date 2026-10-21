@@ -185,6 +185,30 @@ void printMap() {
   Serial.println("MAP_END");
 }
 
+size_t mappingCopyDisplay(char* out, size_t capacity) {
+  const int displaySize = GRID / 2;
+  const size_t required = (size_t)displaySize * (displaySize + 1) + 1;
+  if (!out || capacity < required) return 0;
+
+  const int robotX = OX + (int)lroundf(pose.x / RES);
+  const int robotY = OY + (int)lroundf(pose.y / RES);
+  size_t offset = 0;
+  for (int row = 0; row < displaySize; row++) {
+    int y = GRID - 1 - row * 2;
+    for (int x = 0; x < GRID; x += 2) {
+      int8_t value = max(max(grid[y][x], grid[y][x + 1]),
+                         max(grid[y - 1][x], grid[y - 1][x + 1]));
+      if (abs(x - robotX) <= 1 && abs(y - robotY) <= 1) out[offset++] = 'R';
+      else if (value > 4) out[offset++] = '#';
+      else if (value < -2) out[offset++] = '.';
+      else out[offset++] = ' ';
+    }
+    out[offset++] = '\n';
+  }
+  out[offset] = '\0';
+  return offset;
+}
+
 // ================= Движение (заглушки) =================
 const float MAPPING_FORWARD_MS_PER_CM = 50.0f;
 
